@@ -4,51 +4,74 @@ const imageGenerator = require('../utils/imageGenerator');
 const fs = require('fs');
 
 class CountryController {
-  // Refresh all countries data
+  // Refresh all countries data - FIXED with better error handling
   async refreshCountries(req, res, next) {
-    try {
-      let countriesData, exchangeRates;
+    let countriesData, exchangeRates;
 
+    try {
       // Fetch data from external APIs
       try {
         countriesData = await externalApi.fetchCountries();
         exchangeRates = await externalApi.fetchExchangeRates();
       } catch (error) {
+        console.error('External API error:', error.message);
         return res.status(503).json({
           error: "External data source unavailable",
           details: error.message
         });
       }
 
+      // Validate data
+      if (!countriesData || !Array.isArray(countriesData)) {
+        return res.status(503).json({
+          error: "External data source unavailable",
+          details: "Invalid countries data received"
+        });
+      }
+
       // Process and store countries
       const processedCountries = [];
+      let successCount = 0;
+      let errorCount = 0;
       
       for (const country of countriesData) {
-        const currencyCode = externalApi.getCurrencyCode(country.currencies);
-        let exchangeRate = null;
-        let estimatedGDP = 0;
-
-        if (currencyCode && exchangeRates && exchangeRates[currencyCode]) {
-          exchangeRate = exchangeRates[currencyCode];
-          estimatedGDP = externalApi.calculateEstimatedGDP(country.population, exchangeRate);
-        }
-
-        const countryRecord = {
-          name: country.name,
-          capital: country.capital || null,
-          region: country.region || null,
-          population: country.population,
-          currency_code: currencyCode,
-          exchange_rate: exchangeRate,
-          estimated_gdp: estimatedGDP,
-          flag_url: country.flag
-        };
-
         try {
+          // Validate required fields
+          if (!country.name || country.population === undefined) {
+            console.warn(`Skipping country with missing required fields:`, country.name);
+            errorCount++;
+            continue;
+          }
+
+          const currencyCode = externalApi.getCurrencyCode(country.currencies);
+          let exchangeRate = null;
+          let estimatedGDP = 0;
+
+          // Only fetch exchange rate if currency code exists and is in exchange rates
+          if (currencyCode && exchangeRates && exchangeRates[currencyCode]) {
+            exchangeRate = exchangeRates[currencyCode];
+            estimatedGDP = externalApi.calculateEstimatedGDP(country.population, exchangeRate);
+          } else if (currencyCode) {
+            console.warn(`Exchange rate not found for currency: ${currencyCode}`);
+          }
+
+          const countryRecord = {
+            name: country.name,
+            capital: country.capital || null,
+            region: country.region || null,
+            population: country.population,
+            currency_code: currencyCode,
+            exchange_rate: exchangeRate,
+            estimated_gdp: estimatedGDP,
+            flag_url: country.flag
+          };
+
           await countryModel.upsert(countryRecord);
           processedCountries.push(countryRecord);
+          successCount++;
         } catch (error) {
-          console.error(`Error processing ${country.name}:`, error);
+          console.error(`Error processing ${country.name}:`, error.message);
+          errorCount++;
         }
       }
 
@@ -56,23 +79,33 @@ class CountryController {
       await countryModel.updateRefreshTimestamp();
 
       // Generate summary image
-      const status = await countryModel.getStatus();
-      const topCountries = await countryModel.getAll({}, 'gdp_desc');
-      
-      await imageGenerator.generateSummaryImage(
-        status.total_countries,
-        topCountries.slice(0, 5),
-        status.last_refreshed_at
-      );
+      try {
+        const status = await countryModel.getStatus();
+        const topCountries = await countryModel.getTopCountriesByGDP(5);
+        
+        await imageGenerator.generateSummaryImage(
+          status.total_countries,
+          topCountries,
+          status.last_refreshed_at || new Date().toISOString()
+        );
+      } catch (imageError) {
+        console.error('Error generating summary image:', imageError);
+        // Don't fail the whole request if image generation fails
+      }
 
       res.json({
-        message: `Successfully refreshed ${processedCountries.length} countries`,
-        total_processed: processedCountries.length,
-        last_refreshed_at: status.last_refreshed_at
+        message: `Successfully refreshed ${successCount} countries${errorCount > 0 ? `, ${errorCount} failed` : ''}`,
+        total_processed: successCount,
+        errors: errorCount,
+        last_refreshed_at: new Date().toISOString()
       });
 
     } catch (error) {
-      next(error);
+      console.error('Refresh endpoint error:', error);
+      res.status(500).json({
+        error: "Internal server error",
+        details: process.env.NODE_ENV === 'production' ? undefined : error.message
+      });
     }
   }
 
@@ -89,6 +122,7 @@ class CountryController {
       
       res.json(countries);
     } catch (error) {
+      console.error('Get countries error:', error);
       next(error);
     }
   }
@@ -105,6 +139,7 @@ class CountryController {
 
       res.json(country);
     } catch (error) {
+      console.error('Get country by name error:', error);
       next(error);
     }
   }
@@ -121,11 +156,12 @@ class CountryController {
 
       res.json({ message: "Country deleted successfully" });
     } catch (error) {
+      console.error('Delete country error:', error);
       next(error);
     }
   }
 
-  // Serve summary image
+  // Serve summary image - FIXED with proper error handling
   async getSummaryImage(req, res, next) {
     try {
       if (!imageGenerator.imageExists()) {
@@ -133,9 +169,20 @@ class CountryController {
       }
 
       const imagePath = imageGenerator.getImagePath();
-      res.sendFile(imagePath);
+      
+      // Set proper headers for image
+      res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'public, max-age=300'); // Cache for 5 minutes
+      
+      res.sendFile(imagePath, (err) => {
+        if (err) {
+          console.error('Error sending image:', err);
+          res.status(404).json({ error: "Summary image not found" });
+        }
+      });
     } catch (error) {
-      next(error);
+      console.error('Get summary image error:', error);
+      res.status(404).json({ error: "Summary image not found" });
     }
   }
 }

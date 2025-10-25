@@ -8,15 +8,19 @@ const dbConfig = {
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0
+  queueLimit: 0,
+  reconnect: true,
+  timezone: '+00:00'
 };
 
 const pool = mysql.createPool(dbConfig);
 
 // Initialize database tables
 const initDB = async () => {
+  let connection;
   try {
-    const connection = await pool.getConnection();
+    connection = await pool.getConnection();
+    console.log('Database connected successfully');
     
     // Create countries table
     await connection.execute(`
@@ -35,7 +39,8 @@ const initDB = async () => {
         updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
         INDEX idx_name (name),
         INDEX idx_region (region),
-        INDEX idx_currency (currency_code)
+        INDEX idx_currency (currency_code),
+        INDEX idx_gdp (estimated_gdp)
       )
     `);
 
@@ -48,11 +53,12 @@ const initDB = async () => {
       )
     `);
 
-    connection.release();
     console.log('Database tables initialized successfully');
   } catch (error) {
     console.error('Database initialization failed:', error);
     throw error;
+  } finally {
+    if (connection) connection.release();
   }
 };
 

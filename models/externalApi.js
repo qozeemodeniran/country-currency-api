@@ -8,7 +8,14 @@ class ExternalApi {
 
   async fetchCountries() {
     try {
-      const response = await axios.get(this.countriesApi, { timeout: 10000 });
+      console.log('Fetching countries from:', this.countriesApi);
+      const response = await axios.get(this.countriesApi, { 
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'CountryCurrencyAPI/1.0'
+        }
+      });
+      console.log(`Fetched ${response.data.length} countries`);
       return response.data;
     } catch (error) {
       console.error('Error fetching countries:', error.message);
@@ -18,7 +25,19 @@ class ExternalApi {
 
   async fetchExchangeRates() {
     try {
-      const response = await axios.get(this.exchangeApi, { timeout: 10000 });
+      console.log('Fetching exchange rates from:', this.exchangeApi);
+      const response = await axios.get(this.exchangeApi, { 
+        timeout: 30000,
+        headers: {
+          'User-Agent': 'CountryCurrencyAPI/1.0'
+        }
+      });
+      
+      if (!response.data || !response.data.rates) {
+        throw new Error('Invalid response from exchange API');
+      }
+      
+      console.log('Exchange rates fetched successfully');
       return response.data.rates;
     } catch (error) {
       console.error('Error fetching exchange rates:', error.message);
@@ -28,7 +47,7 @@ class ExternalApi {
 
   // Helper function to get currency code
   getCurrencyCode(currencies) {
-    if (!currencies || currencies.length === 0) {
+    if (!currencies || currencies.length === 0 || !currencies[0]) {
       return null;
     }
     return currencies[0].code || null;
@@ -36,9 +55,10 @@ class ExternalApi {
 
   // Calculate estimated GDP
   calculateEstimatedGDP(population, exchangeRate) {
-    if (!exchangeRate) return 0;
+    if (!exchangeRate || !population) return 0;
     const randomMultiplier = Math.random() * 1000 + 1000; // Random between 1000-2000
-    return (population * randomMultiplier) / exchangeRate;
+    const gdp = (population * randomMultiplier) / exchangeRate;
+    return parseFloat(gdp.toFixed(2));
   }
 }
 

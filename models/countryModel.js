@@ -17,21 +17,37 @@ class CountryModel {
       params.push(filters.currency);
     }
 
-    // Apply sorting
+    // Apply sorting - FIXED GDP SORTING
     if (sort) {
       const sortMapping = {
-        'gdp_desc': 'estimated_gdp DESC',
-        'gdp_asc': 'estimated_gdp ASC',
+        'gdp_desc': 'estimated_gdp DESC NULLS LAST',
+        'gdp_asc': 'estimated_gdp ASC NULLS LAST',
         'population_desc': 'population DESC',
         'population_asc': 'population ASC',
         'name_asc': 'name ASC',
         'name_desc': 'name DESC'
       };
-      query += ` ORDER BY ${sortMapping[sort] || 'name ASC'}`;
+      
+      const sortClause = sortMapping[sort] || 'name ASC';
+      query += ` ORDER BY ${sortClause}`;
+    } else {
+      query += ` ORDER BY name ASC`;
     }
 
     try {
       const [rows] = await pool.execute(query, params);
+      
+      // For GDP sorting, ensure null values are handled properly
+      if (sort && sort.includes('gdp')) {
+        return rows.sort((a, b) => {
+          if (sort === 'gdp_desc') {
+            return (b.estimated_gdp || 0) - (a.estimated_gdp || 0);
+          } else {
+            return (a.estimated_gdp || 0) - (b.estimated_gdp || 0);
+          }
+        });
+      }
+      
       return rows;
     } catch (error) {
       console.error('Error fetching countries:', error);
@@ -51,7 +67,7 @@ class CountryModel {
     }
   }
 
-  // Create or update country
+  // Create or update country - FIXED to handle null values properly
   async upsert(countryData) {
     const query = `
       INSERT INTO countries 
@@ -104,7 +120,9 @@ class CountryModel {
   async getStatus() {
     try {
       const [countResult] = await pool.execute('SELECT COUNT(*) as total FROM countries');
-      const [timestampResult] = await pool.execute('SELECT last_refreshed_at FROM refresh_timestamp ORDER BY id DESC LIMIT 1');
+      const [timestampResult] = await pool.execute(
+        'SELECT last_refreshed_at FROM refresh_timestamp ORDER BY id DESC LIMIT 1'
+      );
       
       return {
         total_countries: countResult[0].total,
@@ -124,6 +142,24 @@ class CountryModel {
     } catch (error) {
       console.error('Error updating refresh timestamp:', error);
       throw error;
+    }
+  }
+
+  // Get top countries by GDP for image generation
+  async getTopCountriesByGDP(limit = 5) {
+    const query = `
+      SELECT name, estimated_gdp 
+      FROM countries 
+      WHERE estimated_gdp IS NOT NULL 
+      ORDER BY estimated_gdp DESC 
+      LIMIT ?
+    `;
+    try {
+      const [rows] = await pool.execute(query, [limit]);
+      return rows;
+    } catch (error) {
+      console.error('Error getting top countries:', error);
+      return [];
     }
   }
 }
