@@ -1,10 +1,8 @@
 // src/controllers/countryController.js
 const db = require('../config/database');
 const axios = require('axios');
-const { createCanvas } = require('canvas');
 const cloudinary = require('../config/cloudinary');
-const path = require('path');
-const fs = require('fs');
+const simpleImageGenerator = require('../utils/simpleImageGenerator');
 
 class CountryController {
   // Refresh countries data
@@ -13,13 +11,17 @@ class CountryController {
       console.log('Starting countries refresh...');
       
       // Fetch countries data
-      const countriesResponse = await axios.get(process.env.COUNTRIES_API_URL);
+      const countriesResponse = await axios.get(process.env.COUNTRIES_API_URL, {
+        timeout: 30000
+      });
       const countries = countriesResponse.data;
       
       // Fetch exchange rates
       let exchangeRates;
       try {
-        const exchangeResponse = await axios.get(process.env.EXCHANGE_API_URL);
+        const exchangeResponse = await axios.get(process.env.EXCHANGE_API_URL, {
+          timeout: 30000
+        });
         exchangeRates = exchangeResponse.data.rates;
       } catch (exchangeError) {
         console.error('Exchange API error:', exchangeError);
@@ -31,13 +33,20 @@ class CountryController {
       
       let refreshTimestamp = new Date();
       let processedCount = 0;
+      let errors = [];
       
       // Process each country
       for (const country of countries) {
         try {
+          // Validate required fields
+          if (!country.name || country.population === undefined) {
+            errors.push(`Missing required fields for country: ${country.name}`);
+            continue;
+          }
+          
           // Extract currency code (take first one if multiple)
           let currencyCode = null;
-          if (country.currencies && country.currencies.length > 0) {
+          if (country.currencies && country.currencies.length > 0 && country.currencies[0].code) {
             currencyCode = country.currencies[0].code;
           }
           
@@ -46,7 +55,7 @@ class CountryController {
           let estimatedGdp = null;
           
           if (currencyCode && exchangeRates[currencyCode]) {
-            exchangeRate = exchangeRates[currencyCode];
+            exchangeRate = parseFloat(exchangeRates[currencyCode]);
             // Generate random multiplier between 1000 and 2000
             const randomMultiplier = Math.random() * 1000 + 1000;
             estimatedGdp = (country.population * randomMultiplier) / exchangeRate;
@@ -88,8 +97,12 @@ class CountryController {
           
           await new Promise((resolve, reject) => {
             db.query(query, values, (err, result) => {
-              if (err) reject(err);
-              else resolve(result);
+              if (err) {
+                console.error(`Database error for ${country.name}:`, err);
+                reject(err);
+              } else {
+                resolve(result);
+              }
             });
           });
           
@@ -97,20 +110,42 @@ class CountryController {
           
         } catch (countryError) {
           console.error(`Error processing country ${country.name}:`, countryError);
+          errors.push(`Failed to process ${country.name}: ${countryError.message}`);
           // Continue with next country
         }
       }
       
       // Generate summary image
-      await this.generateSummaryImage();
+      let imageUrl = null;
+      try {
+        const topCountries = await this.getTopCountriesByGDP();
+        imageUrl = await simpleImageGenerator.generateFormattedSummaryImage(
+          topCountries, 
+          processedCount, 
+          refreshTimestamp
+        );
+      } catch (imageError) {
+        console.error('Error generating summary image:', imageError);
+        errors.push('Failed to generate summary image');
+      }
       
-      console.log(`Refresh completed. Processed ${processedCount} countries.`);
+      console.log(`Refresh completed. Processed ${processedCount} countries. Errors: ${errors.length}`);
       
-      res.json({
+      const response = {
         message: 'Countries data refreshed successfully',
         total_processed: processedCount,
         last_refreshed_at: refreshTimestamp.toISOString()
-      });
+      };
+      
+      if (errors.length > 0) {
+        response.warnings = errors.slice(0, 5); // Limit to first 5 errors
+      }
+      
+      if (imageUrl) {
+        response.summary_image_url = imageUrl;
+      }
+      
+      res.json(response);
       
     } catch (error) {
       console.error('Refresh error:', error);
@@ -121,6 +156,24 @@ class CountryController {
     }
   }
 
+  // Get top 5 countries by GDP
+  async getTopCountriesByGDP() {
+    return new Promise((resolve, reject) => {
+      const query = `
+        SELECT name, estimated_gdp 
+        FROM countries 
+        WHERE estimated_gdp IS NOT NULL 
+        ORDER BY estimated_gdp DESC 
+        LIMIT 5
+      `;
+      
+      db.query(query, (err, results) => {
+        if (err) reject(err);
+        else resolve(results);
+      });
+    });
+  }
+
   // Get all countries with filtering and sorting
   async getCountries(req, res) {
     try {
@@ -129,14 +182,14 @@ class CountryController {
       
       // Filter by region
       if (req.query.region) {
-        query += ' AND region = ?';
+        query += ' AND LOWER(region) = LOWER(?)';
         params.push(req.query.region);
       }
       
       // Filter by currency
       if (req.query.currency) {
         query += ' AND currency_code = ?';
-        params.push(req.query.currency);
+        params.push(req.query.currency.toUpperCase());
       }
       
       // Sorting
@@ -157,6 +210,9 @@ class CountryController {
       } else {
         query += ' ORDER BY name ASC';
       }
+      
+      // Limit for safety
+      query += ' LIMIT 500';
       
       db.query(query, params, (err, results) => {
         if (err) {
@@ -192,7 +248,7 @@ class CountryController {
     try {
       const { name } = req.params;
       
-      const query = 'SELECT * FROM countries WHERE name = ?';
+      const query = 'SELECT * FROM countries WHERE LOWER(name) = LOWER(?)';
       
       db.query(query, [name], (err, results) => {
         if (err) {
@@ -232,7 +288,7 @@ class CountryController {
     try {
       const { name } = req.params;
       
-      const query = 'DELETE FROM countries WHERE name = ?';
+      const query = 'DELETE FROM countries WHERE LOWER(name) = LOWER(?)';
       
       db.query(query, [name], (err, result) => {
         if (err) {
@@ -253,117 +309,20 @@ class CountryController {
     }
   }
 
-  // Generate summary image
-  async generateSummaryImage() {
-    return new Promise(async (resolve, reject) => {
-      try {
-        // Get countries data for the image
-        const countries = await new Promise((resolve, reject) => {
-          db.query(`
-            SELECT name, estimated_gdp 
-            FROM countries 
-            WHERE estimated_gdp IS NOT NULL 
-            ORDER BY estimated_gdp DESC 
-            LIMIT 5
-          `, (err, results) => {
-            if (err) reject(err);
-            else resolve(results);
-          });
-        });
-
-        const totalCountries = await new Promise((resolve, reject) => {
-          db.query('SELECT COUNT(*) as count FROM countries', (err, results) => {
-            if (err) reject(err);
-            else resolve(results[0].count);
-          });
-        });
-
-        const lastRefresh = await new Promise((resolve, reject) => {
-          db.query('SELECT MAX(last_refreshed_at) as last_refresh FROM countries', (err, results) => {
-            if (err) reject(err);
-            else resolve(results[0].last_refresh);
-          });
-        });
-
-        // Create canvas
-        const canvas = createCanvas(800, 600);
-        const ctx = canvas.getContext('2d');
-
-        // Background
-        ctx.fillStyle = '#f8f9fa';
-        ctx.fillRect(0, 0, 800, 600);
-
-        // Title
-        ctx.fillStyle = '#343a40';
-        ctx.font = 'bold 32px Arial';
-        ctx.textAlign = 'center';
-        ctx.fillText('Countries Summary', 400, 60);
-
-        // Total countries
-        ctx.font = '20px Arial';
-        ctx.fillText(`Total Countries: ${totalCountries}`, 400, 110);
-
-        // Last refresh
-        ctx.fillText(`Last Refresh: ${new Date(lastRefresh).toLocaleString()}`, 400, 140);
-
-        // Top 5 GDP countries
-        ctx.font = 'bold 24px Arial';
-        ctx.fillText('Top 5 Countries by GDP', 400, 190);
-
-        ctx.font = '18px Arial';
-        ctx.textAlign = 'left';
-        
-        countries.forEach((country, index) => {
-          const yPos = 230 + (index * 60);
-          ctx.fillText(`${index + 1}. ${country.name}`, 100, yPos);
-          ctx.textAlign = 'right';
-          ctx.fillText(`$${country.estimated_gdp?.toLocaleString(undefined, { maximumFractionDigits: 2 })}`, 700, yPos);
-          ctx.textAlign = 'left';
-        });
-
-        // Convert to buffer
-        const buffer = canvas.toBuffer('image/png');
-
-        // Upload to Cloudinary
-        const uploadResult = await new Promise((resolve, reject) => {
-          cloudinary.uploader.upload_stream(
-            { 
-              resource_type: 'image',
-              public_id: 'countries_summary',
-              folder: 'country-api'
-            },
-            (error, result) => {
-              if (error) reject(error);
-              else resolve(result);
-            }
-          ).end(buffer);
-        });
-
-        console.log('Summary image uploaded to Cloudinary:', uploadResult.secure_url);
-        resolve(uploadResult.secure_url);
-
-      } catch (error) {
-        console.error('Error generating summary image:', error);
-        reject(error);
-      }
-    });
-  }
-
   // Get summary image
   async getSummaryImage(req, res) {
     try {
-      // Get the latest image URL from Cloudinary
-      // In a real implementation, you might store this URL in the database
-      // For now, we'll try to get the most recent upload
-      
+      // Search for the most recent summary image in Cloudinary
       const result = await cloudinary.search
-        .expression('public_id:country-api/countries_summary')
+        .expression('folder:country-api AND public_id:country-api/countries_summary*')
         .sort_by('created_at', 'desc')
         .max_results(1)
         .execute();
 
       if (result.resources.length === 0) {
-        return res.status(404).json({ error: 'Summary image not found' });
+        return res.status(404).json({ 
+          error: 'Summary image not found. Please refresh countries data first by calling POST /countries/refresh' 
+        });
       }
 
       const imageUrl = result.resources[0].secure_url;
@@ -373,7 +332,9 @@ class CountryController {
       
     } catch (error) {
       console.error('Error getting summary image:', error);
-      res.status(404).json({ error: 'Summary image not found' });
+      res.status(404).json({ 
+        error: 'Summary image not found. Please refresh countries data first.' 
+      });
     }
   }
 }
