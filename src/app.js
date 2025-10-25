@@ -5,6 +5,10 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 require('dotenv').config();
 
+// Import configs to initialize them
+require('./config/database');
+require('./config/cloudinary');
+
 const countryRoutes = require('./routes/countries');
 const statusRoutes = require('./routes/status');
 
@@ -26,7 +30,16 @@ app.get('/', (req, res) => {
   res.json({ 
     message: 'Country Currency & Exchange API', 
     status: 'running',
-    timestamp: new Date().toISOString()
+    timestamp: new Date().toISOString(),
+    endpoints: {
+      refresh: 'POST /countries/refresh',
+      get_countries: 'GET /countries',
+      get_country: 'GET /countries/:name',
+      delete_country: 'DELETE /countries/:name',
+      get_image: 'GET /countries/image/generate',
+      get_status: 'GET /status',
+      test_cloudinary: 'GET /countries/test/cloudinary'
+    }
   });
 });
 
@@ -44,7 +57,8 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;

@@ -18,4 +18,7 @@ router.delete('/:name', countryController.deleteCountry);
 // GET /countries/image - Get summary image
 router.get('/image/generate', countryController.getSummaryImage);
 
+// TEST endpoint for Cloudinary
+router.get('/test/cloudinary', countryController.testCloudinary);
+
 module.exports = router;

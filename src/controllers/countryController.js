@@ -115,18 +115,47 @@ class CountryController {
         }
       }
       
-      // Generate summary image
+      // Generate summary image with multiple fallbacks
       let imageUrl = null;
       try {
         const topCountries = await this.getTopCountriesByGDP();
-        imageUrl = await simpleImageGenerator.generateFormattedSummaryImage(
-          topCountries, 
-          processedCount, 
-          refreshTimestamp
-        );
+        console.log('Top countries fetched for image:', topCountries.length);
+        
+        // Try the main method first
+        try {
+          imageUrl = await simpleImageGenerator.generateFormattedSummaryImage(
+            topCountries, 
+            processedCount, 
+            refreshTimestamp
+          );
+          console.log('Main image generation successful');
+        } catch (firstError) {
+          console.log('First image generation failed, trying simple method...', firstError.message);
+          
+          // First fallback
+          try {
+            imageUrl = await simpleImageGenerator.generateSimpleImage(
+              topCountries, 
+              processedCount, 
+              refreshTimestamp
+            );
+            console.log('Simple image generation successful');
+          } catch (secondError) {
+            console.log('Simple image generation failed, trying basic method...', secondError.message);
+            
+            // Final fallback - basic image
+            imageUrl = await simpleImageGenerator.generateBasicImage(
+              processedCount, 
+              refreshTimestamp
+            );
+            console.log('Basic image generation successful');
+          }
+        }
+        
+        console.log('Final image URL:', imageUrl);
       } catch (imageError) {
-        console.error('Error generating summary image:', imageError);
-        errors.push('Failed to generate summary image');
+        console.error('All image generation methods failed:', imageError);
+        errors.push('Failed to generate summary image: ' + imageError.message);
       }
       
       console.log(`Refresh completed. Processed ${processedCount} countries. Errors: ${errors.length}`);
@@ -309,31 +338,88 @@ class CountryController {
     }
   }
 
-  // Get summary image
+  // Get summary image - JSON fallback version
   async getSummaryImage(req, res) {
     try {
-      // Search for the most recent summary image in Cloudinary
-      const result = await cloudinary.search
-        .expression('folder:country-api AND public_id:country-api/countries_summary*')
-        .sort_by('created_at', 'desc')
-        .max_results(1)
-        .execute();
+      // First try to get existing image from Cloudinary
+      try {
+        const result = await cloudinary.search
+          .expression('folder:country-api AND filename:countries_summary*')
+          .sort_by('created_at', 'desc')
+          .max_results(1)
+          .execute();
 
-      if (result.resources.length === 0) {
-        return res.status(404).json({ 
-          error: 'Summary image not found. Please refresh countries data first by calling POST /countries/refresh' 
-        });
+        if (result.resources.length > 0) {
+          const imageUrl = result.resources[0].secure_url;
+          console.log('Found existing image, redirecting to:', imageUrl);
+          return res.redirect(imageUrl);
+        }
+      } catch (searchError) {
+        console.log('No existing image found or search failed:', searchError.message);
       }
 
-      const imageUrl = result.resources[0].secure_url;
+      // If no image found, return JSON summary
+      console.log('No image found, returning JSON summary');
+      const topCountries = await this.getTopCountriesByGDP();
+      const totalCountries = await new Promise((resolve, reject) => {
+        db.query('SELECT COUNT(*) as count FROM countries', (err, results) => {
+          if (err) reject(err);
+          else resolve(results[0].count);
+        });
+      });
       
-      // Redirect to Cloudinary URL
-      res.redirect(imageUrl);
+      const lastRefresh = await new Promise((resolve, reject) => {
+        db.query('SELECT MAX(last_refreshed_at) as last_refresh FROM countries', (err, results) => {
+          if (err) reject(err);
+          else resolve(results[0].last_refresh);
+        });
+      });
+
+      // Return JSON summary instead of image
+      res.json({
+        summary_data: {
+          total_countries: totalCountries,
+          last_refreshed_at: lastRefresh,
+          top_5_countries_by_gdp: topCountries.map((country, index) => ({
+            rank: index + 1,
+            name: country.name,
+            estimated_gdp: country.estimated_gdp,
+            formatted_gdp: country.estimated_gdp ? `$${(country.estimated_gdp / 1e9).toFixed(2)}B` : 'N/A'
+          }))
+        },
+        note: "This endpoint normally returns an image. Currently serving JSON data. Refresh countries data to generate a new image."
+      });
       
     } catch (error) {
       console.error('Error getting summary image:', error);
       res.status(404).json({ 
-        error: 'Summary image not found. Please refresh countries data first.' 
+        error: 'Summary data not found. Please refresh countries data first by calling POST /countries/refresh' 
+      });
+    }
+  }
+
+  // Test endpoint for Cloudinary
+  async testCloudinary(req, res) {
+    try {
+      // Test Cloudinary upload with a simple image
+      const result = await cloudinary.uploader.upload(
+        'https://res.cloudinary.com/demo/image/upload/w_100,h_100,c_fill/sample.jpg',
+        {
+          public_id: `test_image_${Date.now()}`,
+          folder: 'country-api-tests'
+        }
+      );
+      
+      res.json({
+        success: true,
+        message: 'Cloudinary test passed',
+        url: result.secure_url
+      });
+    } catch (error) {
+      res.json({
+        success: false,
+        message: 'Cloudinary test failed',
+        error: error.message
       });
     }
   }
