@@ -5,6 +5,7 @@ class SimpleImageGenerator {
   async generateFormattedSummaryImage(countries, totalCountries, lastRefresh) {
     try {
       console.log('Starting formatted image generation...');
+      console.log('Countries for image:', countries);
       
       // Create base transformation
       const transformations = [
@@ -30,17 +31,22 @@ class SimpleImageGenerator {
       transformations.push('l_text:Arial_24_bold:TOP%205%20COUNTRIES%20BY%20GDP,g_north,y_220');
 
       // Add each country
-      countries.forEach((country, index) => {
-        const yPosition = 280 + (index * 40);
-        const gdpValue = country.estimated_gdp ? (country.estimated_gdp / 1e9).toFixed(2) : '0.00';
-        const countryText = `${index + 1}.%20${encodeURIComponent(country.name)}%3A%20$${gdpValue}B`;
-        transformations.push(`l_text:Arial_18:${countryText},g_north,y_${yPosition}`);
-      });
+      if (countries && countries.length > 0) {
+        countries.forEach((country, index) => {
+          const yPosition = 280 + (index * 40);
+          const gdpValue = country.estimated_gdp ? (country.estimated_gdp / 1e9).toFixed(2) : '0.00';
+          const countryText = `${index + 1}.%20${encodeURIComponent(country.name)}%3A%20$${gdpValue}B`;
+          transformations.push(`l_text:Arial_18:${countryText},g_north,y_${yPosition}`);
+        });
+      } else {
+        transformations.push('l_text:Arial_18:No%20GDP%20data%20available,g_north,y_280');
+      }
 
       const transformationString = transformations.join('/');
       const imageUrl = `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/${transformationString}`;
       
       console.log('Uploading to Cloudinary...');
+      console.log('Image URL length:', imageUrl.length);
       
       // Upload to Cloudinary
       const uploadResult = await cloudinary.uploader.upload(imageUrl, {
@@ -71,14 +77,13 @@ class SimpleImageGenerator {
         'h_400',
         'c_fill',
         'b_lightblue',
-        'e_gradient_fade:10',
         `l_text:Arial_26:Countries%20Summary,co_black,g_center,y_80`,
         `l_text:Arial_18:Total%3A%20${totalCountries}%20countries,co_black,g_center,y_120`,
         `l_text:Arial_16:Updated%3A%20${encodeURIComponent(new Date(lastRefresh).toLocaleDateString())},co_black,g_center,y_150`
       ];
 
       // Add top countries if available
-      if (countries.length > 0) {
+      if (countries && countries.length > 0) {
         params.push('l_text:Arial_18_bold:Top%20Countries%3A,co_black,g_center,y_190');
         countries.slice(0, 3).forEach((country, index) => {
           const yPos = 220 + (index * 25);
@@ -88,6 +93,8 @@ class SimpleImageGenerator {
       }
 
       const imageUrl = `${baseUrl}/${params.join('/')}`;
+      
+      console.log('Simple image URL length:', imageUrl.length);
       
       const uploadResult = await cloudinary.uploader.upload(imageUrl, {
         public_id: `simple_summary_${Date.now()}`,
@@ -108,10 +115,8 @@ class SimpleImageGenerator {
     try {
       console.log('Starting basic image generation...');
       
-      const text = `Countries Summary|Total: ${totalCountries}|Updated: ${new Date(lastRefresh).toLocaleDateString()}`;
-      
       const uploadResult = await cloudinary.uploader.upload(
-        `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/w_400,h_300,c_fill,b_lightsteelblue/l_text:Arial_20:${encodeURIComponent(text)}`,
+        `https://res.cloudinary.com/${process.env.CLOUDINARY_CLOUD_NAME}/image/upload/w_400,h_300,c_fill,b_lightsteelblue/l_text:Arial_20:Countries%20Summary/l_text:Arial_16:Total%3A%20${totalCountries}%20countries/l_text:Arial_14:Updated%3A%20${encodeURIComponent(new Date(lastRefresh).toLocaleDateString())}`,
         {
           public_id: `basic_summary_${Date.now()}`,
           folder: 'country-api',

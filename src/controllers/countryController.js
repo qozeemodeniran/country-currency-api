@@ -5,6 +5,45 @@ const cloudinary = require('../config/cloudinary');
 const simpleImageGenerator = require('../utils/simpleImageGenerator');
 
 class CountryController {
+  // Helper method to get top countries by GDP
+  async getTopCountriesByGDP() {
+    return new Promise((resolve, reject) => {
+      const query = `
+        SELECT name, estimated_gdp 
+        FROM countries 
+        WHERE estimated_gdp IS NOT NULL 
+        ORDER BY estimated_gdp DESC 
+        LIMIT 5
+      `;
+      
+      db.query(query, (err, results) => {
+        if (err) {
+          console.error('Error in getTopCountriesByGDP:', err);
+          reject(err);
+        } else {
+          console.log(`Found ${results.length} top countries for image`);
+          resolve(results);
+        }
+      });
+    });
+  }
+
+  // Helper method to get total countries count
+  async getTotalCountries() {
+    return new Promise((resolve, reject) => {
+      const query = 'SELECT COUNT(*) as count FROM countries';
+      
+      db.query(query, (err, results) => {
+        if (err) {
+          console.error('Error in getTotalCountries:', err);
+          reject(err);
+        } else {
+          resolve(results[0].count);
+        }
+      });
+    });
+  }
+
   // Refresh countries data
   async refreshCountries(req, res) {
     try {
@@ -15,6 +54,7 @@ class CountryController {
         timeout: 30000
       });
       const countries = countriesResponse.data;
+      console.log(`Fetched ${countries.length} countries from API`);
       
       // Fetch exchange rates
       let exchangeRates;
@@ -23,6 +63,7 @@ class CountryController {
           timeout: 30000
         });
         exchangeRates = exchangeResponse.data.rates;
+        console.log('Fetched exchange rates successfully');
       } catch (exchangeError) {
         console.error('Exchange API error:', exchangeError);
         return res.status(503).json({
@@ -118,11 +159,15 @@ class CountryController {
       // Generate summary image with multiple fallbacks
       let imageUrl = null;
       try {
+        console.log('Starting image generation process...');
+        
+        // Get data for image
         const topCountries = await this.getTopCountriesByGDP();
-        console.log('Top countries fetched for image:', topCountries.length);
+        console.log(`Retrieved ${topCountries.length} top countries for image`);
         
         // Try the main method first
         try {
+          console.log('Trying formatted image generation...');
           imageUrl = await simpleImageGenerator.generateFormattedSummaryImage(
             topCountries, 
             processedCount, 
@@ -130,10 +175,11 @@ class CountryController {
           );
           console.log('Main image generation successful');
         } catch (firstError) {
-          console.log('First image generation failed, trying simple method...', firstError.message);
+          console.log('First image generation failed:', firstError.message);
           
           // First fallback
           try {
+            console.log('Trying simple image generation...');
             imageUrl = await simpleImageGenerator.generateSimpleImage(
               topCountries, 
               processedCount, 
@@ -141,14 +187,29 @@ class CountryController {
             );
             console.log('Simple image generation successful');
           } catch (secondError) {
-            console.log('Simple image generation failed, trying basic method...', secondError.message);
+            console.log('Simple image generation failed:', secondError.message);
             
             // Final fallback - basic image
-            imageUrl = await simpleImageGenerator.generateBasicImage(
-              processedCount, 
-              refreshTimestamp
-            );
-            console.log('Basic image generation successful');
+            try {
+              console.log('Trying basic image generation...');
+              imageUrl = await simpleImageGenerator.generateBasicImage(
+                processedCount, 
+                refreshTimestamp
+              );
+              console.log('Basic image generation successful');
+            } catch (thirdError) {
+              console.log('Basic image generation failed:', thirdError.message);
+              
+              // Last resort - placeholder
+              try {
+                console.log('Trying placeholder image...');
+                imageUrl = await simpleImageGenerator.generatePlaceholderImage(processedCount);
+                console.log('Placeholder image generated');
+              } catch (finalError) {
+                console.log('All image generation methods failed completely');
+                throw new Error('All image generation methods failed: ' + finalError.message);
+              }
+            }
           }
         }
         
@@ -183,24 +244,6 @@ class CountryController {
         details: 'Could not fetch data from countries API'
       });
     }
-  }
-
-  // Get top 5 countries by GDP
-  async getTopCountriesByGDP() {
-    return new Promise((resolve, reject) => {
-      const query = `
-        SELECT name, estimated_gdp 
-        FROM countries 
-        WHERE estimated_gdp IS NOT NULL 
-        ORDER BY estimated_gdp DESC 
-        LIMIT 5
-      `;
-      
-      db.query(query, (err, results) => {
-        if (err) reject(err);
-        else resolve(results);
-      });
-    });
   }
 
   // Get all countries with filtering and sorting
@@ -344,7 +387,7 @@ class CountryController {
       // First try to get existing image from Cloudinary
       try {
         const result = await cloudinary.search
-          .expression('folder:country-api AND filename:countries_summary*')
+          .expression('folder:country-api')
           .sort_by('created_at', 'desc')
           .max_results(1)
           .execute();
@@ -361,12 +404,7 @@ class CountryController {
       // If no image found, return JSON summary
       console.log('No image found, returning JSON summary');
       const topCountries = await this.getTopCountriesByGDP();
-      const totalCountries = await new Promise((resolve, reject) => {
-        db.query('SELECT COUNT(*) as count FROM countries', (err, results) => {
-          if (err) reject(err);
-          else resolve(results[0].count);
-        });
-      });
+      const totalCountries = await this.getTotalCountries();
       
       const lastRefresh = await new Promise((resolve, reject) => {
         db.query('SELECT MAX(last_refreshed_at) as last_refresh FROM countries', (err, results) => {
