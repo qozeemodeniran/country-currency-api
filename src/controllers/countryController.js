@@ -4,48 +4,47 @@ const axios = require('axios');
 const cloudinary = require('../config/cloudinary');
 const simpleImageGenerator = require('../utils/simpleImageGenerator');
 
+// Helper functions (not class methods to avoid scope issues)
+const getTopCountriesByGDP = () => {
+  return new Promise((resolve, reject) => {
+    const query = `
+      SELECT name, estimated_gdp 
+      FROM countries 
+      WHERE estimated_gdp IS NOT NULL 
+      ORDER BY estimated_gdp DESC 
+      LIMIT 5
+    `;
+    
+    db.query(query, (err, results) => {
+      if (err) {
+        console.error('Error in getTopCountriesByGDP:', err);
+        reject(err);
+      } else {
+        console.log(`Found ${results.length} top countries for image`);
+        resolve(results);
+      }
+    });
+  });
+};
+
+const getTotalCountries = () => {
+  return new Promise((resolve, reject) => {
+    const query = 'SELECT COUNT(*) as count FROM countries';
+    
+    db.query(query, (err, results) => {
+      if (err) {
+        console.error('Error in getTotalCountries:', err);
+        reject(err);
+      } else {
+        resolve(results[0].count);
+      }
+    });
+  });
+};
+
 class CountryController {
-  // Helper method to get top countries by GDP
-  async getTopCountriesByGDP() {
-    return new Promise((resolve, reject) => {
-      const query = `
-        SELECT name, estimated_gdp 
-        FROM countries 
-        WHERE estimated_gdp IS NOT NULL 
-        ORDER BY estimated_gdp DESC 
-        LIMIT 5
-      `;
-      
-      db.query(query, (err, results) => {
-        if (err) {
-          console.error('Error in getTopCountriesByGDP:', err);
-          reject(err);
-        } else {
-          console.log(`Found ${results.length} top countries for image`);
-          resolve(results);
-        }
-      });
-    });
-  }
-
-  // Helper method to get total countries count
-  async getTotalCountries() {
-    return new Promise((resolve, reject) => {
-      const query = 'SELECT COUNT(*) as count FROM countries';
-      
-      db.query(query, (err, results) => {
-        if (err) {
-          console.error('Error in getTotalCountries:', err);
-          reject(err);
-        } else {
-          resolve(results[0].count);
-        }
-      });
-    });
-  }
-
   // Refresh countries data
-  async refreshCountries(req, res) {
+  refreshCountries = async (req, res) => {
     try {
       console.log('Starting countries refresh...');
       
@@ -161,8 +160,8 @@ class CountryController {
       try {
         console.log('Starting image generation process...');
         
-        // Get data for image
-        const topCountries = await this.getTopCountriesByGDP();
+        // Get data for image - using the helper function directly
+        const topCountries = await getTopCountriesByGDP();
         console.log(`Retrieved ${topCountries.length} top countries for image`);
         
         // Try the main method first
@@ -247,7 +246,7 @@ class CountryController {
   }
 
   // Get all countries with filtering and sorting
-  async getCountries(req, res) {
+  getCountries = async (req, res) => {
     try {
       let query = 'SELECT * FROM countries WHERE 1=1';
       const params = [];
@@ -316,7 +315,7 @@ class CountryController {
   }
 
   // Get single country by name
-  async getCountryByName(req, res) {
+  getCountryByName = async (req, res) => {
     try {
       const { name } = req.params;
       
@@ -356,7 +355,7 @@ class CountryController {
   }
 
   // Delete country by name
-  async deleteCountry(req, res) {
+  deleteCountry = async (req, res) => {
     try {
       const { name } = req.params;
       
@@ -382,7 +381,7 @@ class CountryController {
   }
 
   // Get summary image - JSON fallback version
-  async getSummaryImage(req, res) {
+  getSummaryImage = async (req, res) => {
     try {
       // First try to get existing image from Cloudinary
       try {
@@ -403,8 +402,8 @@ class CountryController {
 
       // If no image found, return JSON summary
       console.log('No image found, returning JSON summary');
-      const topCountries = await this.getTopCountriesByGDP();
-      const totalCountries = await this.getTotalCountries();
+      const topCountries = await getTopCountriesByGDP();
+      const totalCountries = await getTotalCountries();
       
       const lastRefresh = await new Promise((resolve, reject) => {
         db.query('SELECT MAX(last_refreshed_at) as last_refresh FROM countries', (err, results) => {
@@ -437,7 +436,7 @@ class CountryController {
   }
 
   // Test endpoint for Cloudinary
-  async testCloudinary(req, res) {
+  testCloudinary = async (req, res) => {
     try {
       // Test Cloudinary upload with a simple image
       const result = await cloudinary.uploader.upload(
