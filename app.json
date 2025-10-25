@@ -1,0 +1,16 @@
+{
+  "name": "Country Currency API",
+  "description": "RESTful API for country currency and exchange rates",
+  "repository": "https://github.com/qozeemodeniran/country-currency-api",
+  "keywords": ["node", "express", "mysql", "countries", "currency"],
+  "env": {
+    "NODE_ENV": {
+      "description": "Environment",
+      "value": "production"
+    }
+  },
+  "addons": [
+    "jawsdb:kite-12",
+    "cloudinary:starter"
+  ]
+}
