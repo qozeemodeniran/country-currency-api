@@ -57,24 +57,26 @@ const countriesController = {
     }
   },
 
-  async getCountryByName(req, res) {
-    try {
-      const country = await countryService.getCountryByName(req.params.name);
-      
-      if (!country) {
-        return res.status(404).json({
-          error: 'Country not found'
-        });
-      }
-
-      res.json(country);
-    } catch (error) {
-      console.error('Get country error:', error);
-      res.status(500).json({
-        error: 'Internal server error'
+async getCountriesImage(req, res) {
+  try {
+    const imagePath = imageService.getImagePath();
+    
+    if (!imagePath) {
+      return res.status(404).json({
+        error: 'Summary image not found'
       });
     }
-  },
+
+    res.setHeader('Content-Type', 'image/svg+xml');
+    res.setHeader('Cache-Control', 'no-cache');
+    fs.createReadStream(imagePath).pipe(res);
+  } catch (error) {
+    console.error('Get image error:', error);
+    res.status(500).json({
+      error: 'Internal server error'
+    });
+  }
+},
 
   async deleteCountry(req, res) {
     try {
