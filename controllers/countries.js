@@ -5,21 +5,28 @@ const fs = require('fs');
 const countriesController = {
   async refreshCountries(req, res) {
     try {
-      console.log('Starting countries refresh...');
+      console.log('Starting countries refresh process...');
       const result = await countryService.refreshCountries();
       
-      // Generate summary image after refresh
-      await imageService.generateSummaryImage();
+      // Generate summary image after successful refresh
+      try {
+        await imageService.generateSummaryImage();
+        console.log('Summary image generated successfully');
+      } catch (imageError) {
+        console.error('Failed to generate summary image:', imageError.message);
+        // Don't fail the entire refresh if image generation fails
+      }
       
       res.json({
         message: 'Countries data refreshed successfully',
         processed: result.processed,
+        success: result.success,
         total: result.total
       });
     } catch (error) {
       console.error('Refresh error:', error);
       
-      if (error.message.includes('Failed to fetch')) {
+      if (error.message.includes('Could not fetch data from')) {
         return res.status(503).json({
           error: 'External data source unavailable',
           details: error.message
@@ -27,8 +34,7 @@ const countriesController = {
       }
       
       res.status(500).json({
-        error: 'Internal server error',
-        details: error.message
+        error: 'Internal server error'
       });
     }
   },
@@ -102,6 +108,7 @@ const countriesController = {
       }
 
       res.setHeader('Content-Type', 'image/png');
+      res.setHeader('Cache-Control', 'no-cache');
       fs.createReadStream(imagePath).pipe(res);
     } catch (error) {
       console.error('Get image error:', error);
